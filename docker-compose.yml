@@ -31,6 +31,7 @@ services:
     volumes:
       - .:/app
       - ./creds.json:/root/.config/gcloud/creds.json  # Mount Google Cloud credentials
+    restart: always
 
 volumes:
   postgres_data:
