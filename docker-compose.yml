@@ -1,13 +1,12 @@
 version: '3.8'
 
 services:
-  postgres:
+  docubrain-postgres:
     image: postgres:16-alpine
     container_name: docubrain-postgres
-    network_mode: "host"
     environment:
-      POSTGRES_USER: docubrain         # Set your PostgreSQL username
-      POSTGRES_PASSWORD: docubrain@123 # Set your PostgreSQL password
+      POSTGRES_USER: docubrain
+      POSTGRES_PASSWORD: docubrain123
       POSTGRES_DB: docubrain       # Default database created at startup
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -16,8 +15,10 @@ services:
     restart: always
   web:
     build: .
+    depends_on: 
+      - docubrain-postgres
     container_name: python-app
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    command: /bin/sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
     environment:
@@ -25,9 +26,11 @@ services:
       - DB_PORT=5432
       - DB_NAME=docubrain
       - DB_USER=docubrain
-      - DB_PASSWORD=docubrain@123
+      - DB_PASSWORD=docubrain123
+      - GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/creds.json
     volumes:
       - .:/app
+      - ./creds.json:/root/.config/gcloud/creds.json  # Mount Google Cloud credentials
 
 volumes:
   postgres_data:
