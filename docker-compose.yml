@@ -12,13 +12,14 @@ services:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432" # Expose PostgreSQL on the host machine at port 5432
-    restart: always
+    restart: unless-stopped
   web:
     build: .
     depends_on: 
       - docubrain-postgres
+      - redis
     container_name: python-app
-    command: /bin/sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    command: /bin/sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 & celery -A app.celery_app worker --loglevel=info"
     ports:
       - "8000:8000"
     environment:
@@ -27,11 +28,18 @@ services:
       - DB_NAME=docubrain
       - DB_USER=docubrain
       - DB_PASSWORD=docubrain123
+      - CELERY_BROKER_URL=redis://redis:6379/0
       - GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/creds.json
     volumes:
       - .:/app
       - ./creds.json:/root/.config/gcloud/creds.json  # Mount Google Cloud credentials
     restart: always
+  redis:
+    image: "redis:6.0"
+    container_name: redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
 
 volumes:
   postgres_data:
