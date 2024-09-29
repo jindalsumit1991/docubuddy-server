@@ -17,10 +17,10 @@ RUN apt-get update && \
 # Set the working directory inside the container
 WORKDIR /app
 
-COPY wheels /app/wheels
+#COPY wheels /app/wheels
 
 # Install the wheels from the copied directory
-RUN pip3 install --no-cache-dir /app/wheels/*.whl
+#RUN pip3 install --no-cache-dir /app/wheels/*.whl
 
 # Copy the requirements file into the container
 COPY requirements.txt .

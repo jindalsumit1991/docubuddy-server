@@ -9,6 +9,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from celery import Celery
 from fastapi import FastAPI, UploadFile, File, HTTPException, Header, Depends
 from google.cloud import storage
+from logstash_async.formatter import LogstashFormatter
+from logstash_async.handler import AsynchronousLogstashHandler
 from sqlalchemy import asc
 from sqlalchemy.orm import Session
 from vertexai.generative_models import Image, GenerativeModel
@@ -21,13 +23,22 @@ from app.models import OpdRecord  # Assuming the table is defined in app/models.
 settings = get_settings()
 
 # Configure logging
-logging.basicConfig(level=settings.LOG_LEVEL, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=settings.LOG_LEVEL, format='%(asctime)s - %(levelname)s - %(message)s')
+
+logstash_handler = AsynchronousLogstashHandler(
+    host='logstash',  # Logstash container hostname
+    port=9601,  # Logstash port (match this with Logstash config)
+    database_path=None
+)
+logger.addHandler(logstash_handler)
+logstash_handler.setFormatter(LogstashFormatter())
 
 # Initialize services
 scheduler = BackgroundScheduler()
 celery_app = Celery('tasks', broker=settings.CELERY_BROKER_URL)
 storage_client = storage.Client()
+
 
 def upload_to_gcs(file: BytesIO, filename: str):
     """Upload a file to Google Cloud Storage."""
@@ -49,7 +60,11 @@ def get_files_with_null_value_ai(db: Session, limit: int = 10):
                .filter(OpdRecord.value_ai == None)
                .order_by(asc(OpdRecord.created_at))
                .limit(limit).all())
-    logger.info(f"Found these records in DB with null UHID: {records}.\n")
+
+    # Extracting IDs of records
+    record_ids = [record.id for record in records]
+    # Logging the IDs of records
+    logger.debug(f"Found these record IDs in DB with missing UHID: {record_ids}.\n")
     return records
 
 
@@ -81,13 +96,12 @@ def process_single_file(file_path: str, record_id: uuid, field1: str):
 
     # Check if the response was successful
     if response:
-        logger.info(f"Google's response: \n{response}\n")
         response_dict = response.to_dict()
         extracted_text = response_dict['candidates'][0]['content']['parts'][0]['text']
-        confidence_score = process_confidence_score(response_dict)
-        logger.info(f"Google returned UHID {str(extracted_text)} with confidence score {confidence_score}\n")
+        confidence_score = process_confidence_score(response_dict, extracted_text)
+        logger.info(f"Google returned UHID [{str(extracted_text)}] for [{record_id}] with confidence score"
+                    f" [{confidence_score}]\n")
         # Update the DB record with the new value_ai value
-        logger.info(f"Updating record {record_id} with AI result...\n")
         record = db.query(OpdRecord).filter(OpdRecord.id == record_id).first()
         record.value_ai = str(extracted_text)
         timestamp = datetime.now().strftime("%d-%m-%Y-%H.%M.%S") + f".{datetime.now().microsecond // 1000:03d}"
@@ -98,17 +112,19 @@ def process_single_file(file_path: str, record_id: uuid, field1: str):
         db.commit()
     db.close()
 
-def process_confidence_score(response, threshold=-0.5):
+
+def process_confidence_score(response, extracted_text, threshold=-0.2):
     try:
         avg_logprobs = response['candidates'][0]['avg_logprobs']
 
         # Check if the confidence is below the threshold
         if avg_logprobs < threshold:
-            logger.warning(f"Low confidence: {avg_logprobs}. Consider extra processing.")
+            logger.info(f"Low confidence: {avg_logprobs} for UHID [{extracted_text}]. Consider extra processing.")
         return avg_logprobs
     except (KeyError, IndexError) as e:
         logger.error(f"Error extracting confidence score: {str(e)}")
         return None
+
 
 # Function to process files from DB
 def process_files():
@@ -144,6 +160,7 @@ def fetch_image_from_bucket(bucket_name: str, file_path: str):
     image_bytes = blob.download_as_bytes()
 
     return image_bytes
+
 
 # Function to move file in GCS
 def move_file_in_bucket(bucket_name: str, source_path: str, destination_path: str):
@@ -183,7 +200,6 @@ def send_to_google_vision(file_path: str, field1: str):
 			''']
     )
 
-    logger.debug(f">>>Received \"{response}\" from google")
     # Process and return the response as needed
     return response
 
@@ -193,7 +209,7 @@ def start_scheduler():
     logger.info("Starting scheduler on app startup...\n")
 
     # Schedule the process_files job to run every minute
-    scheduler.add_job(process_files, 'interval', seconds=30)
+    scheduler.add_job(process_files, 'interval', seconds=60)
     scheduler.start()
 
 
@@ -261,7 +277,6 @@ async def upload_images(
 
 def add_file_to_db(db: Session, username: str, institution_id: int, file_path: str):
     """Insert the uploaded file info into the database."""
-    logger.info("add_file_to_db called...\n")
     new_record = OpdRecord(
         username=username,  # You can add other fields as needed
         institution_id=institution_id,  # hospital value mapped to institution_id

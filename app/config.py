@@ -3,6 +3,12 @@ from pydantic_settings import BaseSettings
 from functools import lru_cache
 
 class Settings(BaseSettings):
+
+    class Config:
+        env_file = ".env"
+        extra = "ignore"
+        case_sensitive = True
+
     # Database settings
     DATABASE_URL: str = os.getenv('DATABASE_URL', 'postgresql://docubrain:docubrain123@docubrain-postgres:5432/docubrain')
 
@@ -21,10 +27,6 @@ class Settings(BaseSettings):
 
     # Logging settings
     LOG_LEVEL: str = "INFO"
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
 
 @lru_cache()
 def get_settings():
